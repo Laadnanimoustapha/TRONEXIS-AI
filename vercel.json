@@ -1,0 +1,31 @@
+{
+  "builds": [
+    {
+      "src": "api/*.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/summarize",
+      "dest": "/api/summarize",
+      "methods": ["POST"]
+    },
+    {
+      "src": "/",
+      "dest": "/api/index"
+    }
+  ],
+  
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "https://laadnanimoustapha.github.io" },
+        { "key": "Access-Control-Allow-Methods", "value": "POST" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
+      ]
+    }
+  ]
+
+}
