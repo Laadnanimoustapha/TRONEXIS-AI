@@ -1,24 +1,24 @@
 {
-  "rewrites": [
-    { "source": "/summarize", "destination": "/api/summarize" },
-    { "source": "/", "destination": "/api/index" }
+  "routes": [
+    {
+      "handle": "rewrite",
+      "src": "/summarize",
+      "dest": "/api/summarize",
+      "methods": ["POST"]
+    },
+    {
+      "handle": "rewrite",
+      "src": "/",
+      "dest": "/api/index"
+    }
   ],
   "headers": [
     {
-      "source": "/(.*)",
+      "source": "/api/(.*)",
       "headers": [
-        { 
-          "key": "Access-Control-Allow-Origin", 
-          "value": "https://laadnanimoustapha.github.io" 
-        },
-        { 
-          "key": "Access-Control-Allow-Methods", 
-          "value": "GET,POST" 
-        },
-        { 
-          "key": "Access-Control-Allow-Headers", 
-          "value": "Content-Type" 
-        }
+        { "key": "Access-Control-Allow-Origin", "value": "https://laadnanimoustapha.github.io" },
+        { "key": "Access-Control-Allow-Methods", "value": "POST" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
       ]
     }
   ]
