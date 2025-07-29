@@ -49,7 +49,11 @@ window.addEventListener('DOMContentLoaded', async () => {
             textGenerator = await pipeline('text2text-generation', 'Xenova/LaMini-Flan-T5-77M', {
                 quantized: true,
                 progress_callback: (progress) => {
-                    const percent = Math.round(progress * 100);
+                    // Ensure progress is a valid number between 0 and 1
+                    let percent = 0;
+                    if (typeof progress === 'number' && !isNaN(progress) && progress >= 0 && progress <= 1) {
+                        percent = Math.round(progress * 100);
+                    }
                     progressElement.textContent = `${percent}%`;
                     const progressBar = elements.loading.querySelector('.progress-bar');
                     progressBar.style.width = `${percent}%`;
