@@ -3,14 +3,18 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <numeric>
+#include <optional>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -48,6 +52,35 @@ std::string toUpper(std::string text) {
         return static_cast<char>(std::toupper(ch));
     });
     return text;
+}
+
+std::string toTitleCase(const std::string &text) {
+    std::string result;
+    result.reserve(text.size());
+    bool capitalizeNext = true;
+
+    for (unsigned char ch : text) {
+        if (std::isspace(ch) != 0) {
+            capitalizeNext = true;
+            result.push_back(static_cast<char>(ch));
+            continue;
+        }
+
+        if (capitalizeNext) {
+            result.push_back(static_cast<char>(std::toupper(ch)));
+            capitalizeNext = false;
+        } else {
+            result.push_back(static_cast<char>(std::tolower(ch)));
+        }
+    }
+
+    return result;
+}
+
+std::string reverseText(const std::string &text) {
+    std::string reversed = text;
+    std::reverse(reversed.begin(), reversed.end());
+    return reversed;
 }
 
 std::string normalizeForComparison(const std::string &text) {
@@ -133,6 +166,136 @@ std::vector<std::string> splitUniqueWords(const std::string &text) {
     std::sort(words.begin(), words.end());
     words.erase(std::unique(words.begin(), words.end()), words.end());
     return words;
+}
+
+std::vector<std::string> extractUppercaseWords(const std::string &text) {
+    std::vector<std::string> uppercaseWords;
+    std::string current;
+
+    auto flushWord = [&]() {
+        if (current.size() > 1 && std::all_of(current.begin(), current.end(), [](unsigned char ch) {
+                                    return std::isupper(ch) != 0;
+                                })) {
+            uppercaseWords.push_back(current);
+        }
+        current.clear();
+    };
+
+    for (unsigned char ch : text) {
+        if (std::isalpha(ch) != 0) {
+            current.push_back(static_cast<char>(ch));
+        } else {
+            flushWord();
+        }
+    }
+
+    flushWord();
+    return uppercaseWords;
+}
+
+// --- Frequency helpers -----------------------------------------------------------------------
+
+struct FrequencyEntry {
+    std::string token;
+    int count{};
+    double percentage{};
+};
+
+std::vector<FrequencyEntry> computeAffixFrequency(const std::vector<std::string> &words,
+                                                  std::size_t affixLength,
+                                                  bool prefix,
+                                                  std::size_t topN) {
+    std::unordered_map<std::string, int> frequency;
+
+    for (const auto &word : words) {
+        if (word.size() < affixLength) {
+            continue;
+        }
+        const std::string affix = prefix ? word.substr(0, affixLength)
+                                         : word.substr(word.size() - affixLength, affixLength);
+        frequency[affix]++;
+    }
+
+    std::vector<FrequencyEntry> results;
+    results.reserve(frequency.size());
+    for (const auto &[token, count] : frequency) {
+        FrequencyEntry entry;
+        entry.token = token;
+        entry.count = count;
+        entry.percentage = words.empty() ? 0.0
+                                         : (static_cast<double>(count) * 100.0) / static_cast<double>(words.size());
+        results.push_back(entry);
+    }
+
+    std::sort(results.begin(), results.end(), [](const FrequencyEntry &lhs, const FrequencyEntry &rhs) {
+        if (lhs.count == rhs.count) {
+            return lhs.token < rhs.token;
+        }
+        return lhs.count > rhs.count;
+    });
+
+    if (results.size() > topN) {
+        results.resize(topN);
+    }
+
+    return results;
+}
+
+std::vector<FrequencyEntry> computeLetterPairs(const std::string &text, std::size_t topN) {
+    std::unordered_map<std::string, int> frequency;
+    std::string normalized = normalizeForComparison(text);
+
+    if (normalized.size() < 2) {
+        return {};
+    }
+
+    for (std::size_t i = 0; i + 1 < normalized.size(); ++i) {
+        const std::string pair = normalized.substr(i, 2);
+        frequency[pair]++;
+    }
+
+    std::vector<FrequencyEntry> results;
+    results.reserve(frequency.size());
+
+    for (const auto &[pair, count] : frequency) {
+        FrequencyEntry entry;
+        entry.token = pair;
+        entry.count = count;
+        entry.percentage = normalized.empty()
+                                ? 0.0
+                                : (static_cast<double>(count) * 100.0) / static_cast<double>(normalized.size());
+        results.push_back(entry);
+    }
+
+    std::sort(results.begin(), results.end(), [](const FrequencyEntry &lhs, const FrequencyEntry &rhs) {
+        if (lhs.count == rhs.count) {
+            return lhs.token < rhs.token;
+        }
+        return lhs.count > rhs.count;
+    });
+
+    if (results.size() > topN) {
+        results.resize(topN);
+    }
+
+    return results;
+}
+
+std::vector<std::string> detectRepeatedSentences(const std::vector<std::string> &sentences) {
+    std::unordered_map<std::string, int> counts;
+    for (const auto &sentence : sentences) {
+        const std::string canonical = toLower(trim(sentence));
+        counts[canonical]++;
+    }
+
+    std::vector<std::string> repeated;
+    for (const auto &[sentence, count] : counts) {
+        if (count > 1) {
+            repeated.push_back(sentence);
+        }
+    }
+
+    return repeated;
 }
 
 // --- N-gram utilities -----------------------------------------------------------------------
@@ -249,12 +412,49 @@ double fleschKincaidGradeLevel(int totalWords, int totalSentences, int totalSyll
     return (0.39 * wordsPerSentence) + (11.8 * syllablesPerWord) - 15.59;
 }
 
+double gunningFogIndex(int totalWords, int totalSentences, int complexWords) {
+    if (totalWords == 0 || totalSentences == 0) {
+        return 0.0;
+    }
+
+    const double averageWordsPerSentence = static_cast<double>(totalWords) / static_cast<double>(totalSentences);
+    const double complexWordPercentage = static_cast<double>(complexWords) * 100.0 / static_cast<double>(totalWords);
+    return 0.4 * (averageWordsPerSentence + complexWordPercentage);
+}
+
+double smogIndex(int totalSentences, int complexWords) {
+    if (totalSentences == 0 || complexWords == 0) {
+        return 0.0;
+    }
+
+    return 1.0430 * std::sqrt(static_cast<double>(complexWords) * (30.0 / static_cast<double>(totalSentences))) +
+           3.1291;
+}
+
+double colemanLiauIndex(int totalWords, int totalSentences, int totalLetters) {
+    if (totalWords == 0 || totalSentences == 0) {
+        return 0.0;
+    }
+
+    const double L = (static_cast<double>(totalLetters) / static_cast<double>(totalWords)) * 100.0;
+    const double S = (static_cast<double>(totalSentences) / static_cast<double>(totalWords)) * 100.0;
+    return (0.0588 * L) - (0.296 * S) - 15.8;
+}
+
+double automatedReadabilityIndex(int totalWords, int totalSentences, int totalLetters) {
+    if (totalWords == 0 || totalSentences == 0) {
+        return 0.0;
+    }
+
+    const double charactersPerWord = static_cast<double>(totalLetters) / static_cast<double>(totalWords);
+    const double wordsPerSentence = static_cast<double>(totalWords) / static_cast<double>(totalSentences);
+    return (4.71 * charactersPerWord) + (0.5 * wordsPerSentence) - 21.43;
+}
+
 // --- Sentiment estimation --------------------------------------------------------------------
 
-struct SentimentLexicon {
-    std::unordered_set<std::string> positiveWords;
-    std::unordered_set<std::string> negativeWords;
-
+class SentimentLexicon {
+  public:
     SentimentLexicon() {
         positiveWords = {
             "amazing", "awesome", "beautiful", "best", "brilliant", "cheerful", "creative", "delightful",
@@ -266,6 +466,67 @@ struct SentimentLexicon {
             "gloomy", "horrible", "hurt", "imperfect", "jealous", "lonely", "mad", "negative", "pain",
             "sad", "terrible", "ugly", "worst", "worthless"};
     }
+
+    void addPositive(const std::string &word) {
+        positiveWords.insert(toLower(word));
+    }
+
+    void addNegative(const std::string &word) {
+        negativeWords.insert(toLower(word));
+    }
+
+    bool removePositive(const std::string &word) {
+        return positiveWords.erase(toLower(word)) > 0;
+    }
+
+    bool removeNegative(const std::string &word) {
+        return negativeWords.erase(toLower(word)) > 0;
+    }
+
+    void printSummary() const {
+        std::cout << "\nLexicon summary" << std::endl;
+        std::cout << "----------------" << std::endl;
+        std::cout << "Positive words: " << positiveWords.size() << std::endl;
+        std::cout << "Negative words: " << negativeWords.size() << std::endl;
+
+        std::cout << "Sample positives: ";
+        int showcase = 0;
+        for (const auto &word : positiveWords) {
+            std::cout << word << " ";
+            if (++showcase >= 8) {
+                break;
+            }
+        }
+        if (positiveWords.empty()) {
+            std::cout << "<empty>";
+        }
+        std::cout << std::endl;
+
+        std::cout << "Sample negatives: ";
+        showcase = 0;
+        for (const auto &word : negativeWords) {
+            std::cout << word << " ";
+            if (++showcase >= 8) {
+                break;
+            }
+        }
+        if (negativeWords.empty()) {
+            std::cout << "<empty>";
+        }
+        std::cout << std::endl;
+    }
+
+    const std::unordered_set<std::string> &positives() const {
+        return positiveWords;
+    }
+
+    const std::unordered_set<std::string> &negatives() const {
+        return negativeWords;
+    }
+
+  private:
+    std::unordered_set<std::string> positiveWords;
+    std::unordered_set<std::string> negativeWords;
 };
 
 struct SentimentScore {
@@ -279,10 +540,10 @@ SentimentScore analyzeSentiment(const std::vector<std::string> &words, const Sen
     SentimentScore score;
 
     for (const auto &word : words) {
-        if (lexicon.positiveWords.count(word) != 0) {
+        if (lexicon.positives().count(word) != 0) {
             ++score.positiveMatches;
         }
-        if (lexicon.negativeWords.count(word) != 0) {
+        if (lexicon.negatives().count(word) != 0) {
             ++score.negativeMatches;
         }
     }
@@ -415,6 +676,51 @@ std::vector<SentenceInsight> analyzeSentences(const std::vector<std::string> &se
     return insights;
 }
 
+// --- Patterns and diagnostics ----------------------------------------------------------------
+
+struct PatternInsight {
+    int questionCount{};
+    int exclamationCount{};
+    int ellipsisCount{};
+    int uppercaseWordCount{};
+    int numericTokenCount{};
+    int longWordCount{};
+};
+
+PatternInsight analyzePatterns(const std::string &text, const std::vector<std::string> &words,
+                               const std::vector<std::string> &uppercaseWords) {
+    PatternInsight insight;
+
+    insight.uppercaseWordCount = static_cast<int>(uppercaseWords.size());
+
+    for (char ch : text) {
+        if (ch == '?') {
+            ++insight.questionCount;
+        } else if (ch == '!') {
+            ++insight.exclamationCount;
+        }
+    }
+
+    std::size_t position = text.find("...");
+    while (position != std::string::npos) {
+        ++insight.ellipsisCount;
+        position = text.find("...", position + 3);
+    }
+
+    for (const auto &word : words) {
+        if (word.size() >= 10) {
+            ++insight.longWordCount;
+        }
+        if (!word.empty() && std::all_of(word.begin(), word.end(), [](unsigned char ch) {
+                return std::isdigit(ch) != 0;
+            })) {
+            ++insight.numericTokenCount;
+        }
+    }
+
+    return insight;
+}
+
 // --- Text history ----------------------------------------------------------------------------
 
 struct TextHistoryEntry {
@@ -452,6 +758,17 @@ class TextHistory {
     static constexpr std::size_t maximumEntries = 12;
 };
 
+// --- Readability profile ---------------------------------------------------------------------
+
+struct ReadabilityProfile {
+    double fleschReadingEase{};
+    double fleschKincaid{};
+    double gunningFog{};
+    double smog{};
+    double colemanLiau{};
+    double automatedReadability{};
+};
+
 // --- Text intelligence summary ---------------------------------------------------------------
 
 struct TextAnalysis {
@@ -459,30 +776,154 @@ struct TextAnalysis {
     std::string trimmedText;
     std::string uppercaseText;
     std::string lowercaseText;
+    std::string titleCaseText;
+    std::string reversedText;
+
     std::vector<std::string> words;
     std::vector<std::string> uniqueWords;
     std::vector<std::string> sentences;
     std::vector<SentenceInsight> sentenceInsights;
+
     NGramFrequencyMap bigrams;
     NGramFrequencyMap trigrams;
+
     CharacterSignature characterSignature;
     SentimentScore sentiment;
     std::vector<KeywordInsight> keywords;
+    std::vector<FrequencyEntry> commonPrefixes;
+    std::vector<FrequencyEntry> commonSuffixes;
+    std::vector<FrequencyEntry> frequentLetterPairs;
+
     SentenceInsight longestSentence;
     SentenceInsight shortestSentence;
+
     std::string longestWord;
     std::string shortestWord;
+
     bool palindrome{};
 
     int charCountWithSpaces{};
     int charCountWithoutSpaces{};
     int totalSyllables{};
     int totalWordLength{};
+    int totalLetters{};
+    int complexWordCount{};
 
     double averageWordLength{};
+    double medianWordLength{};
+    double vocabularyDiversity{};
     double averageSentenceLength{};
-    double fleschScore{};
-    double gradeLevel{};
+    double averageSyllablesPerWord{};
+    double complexWordPercentage{};
+
+    ReadabilityProfile readability;
+    PatternInsight patterns;
+
+    std::vector<std::string> uppercaseWords;
+    std::vector<std::string> repeatedSentences;
+    std::vector<std::string> creativePrompts;
+};
+
+// --- App configuration -----------------------------------------------------------------------
+
+class AppConfig {
+  public:
+    AppConfig()
+        : keywordLimitValue(10), showAsciiChartsValue(true), autoExportEnabledValue(false),
+          autoExportPathValue("text_intelligence_report.txt"), highlightUppercaseValue(true) {}
+
+    std::size_t keywordLimit() const {
+        return keywordLimitValue;
+    }
+
+    bool showAsciiCharts() const {
+        return showAsciiChartsValue;
+    }
+
+    bool autoExportEnabled() const {
+        return autoExportEnabledValue;
+    }
+
+    const std::string &autoExportPath() const {
+        return autoExportPathValue;
+    }
+
+    bool highlightUppercase() const {
+        return highlightUppercaseValue;
+    }
+
+    void configure() {
+        while (true) {
+            std::cout << "\n⚙️  Configuration" << std::endl;
+            std::cout << "----------------" << std::endl;
+            std::cout << "1. Set keyword limit (current: " << keywordLimitValue << ")" << std::endl;
+            std::cout << "2. Toggle ASCII charts (current: " << (showAsciiChartsValue ? "On" : "Off") << ")"
+                      << std::endl;
+            std::cout << "3. Toggle auto-export last report (current: "
+                      << (autoExportEnabledValue ? "On" : "Off") << ")" << std::endl;
+            std::cout << "4. Change auto-export path (current: " << autoExportPathValue << ")" << std::endl;
+            std::cout << "5. Toggle uppercase highlight tips (current: "
+                      << (highlightUppercaseValue ? "On" : "Off") << ")" << std::endl;
+            std::cout << "6. Return to main menu" << std::endl;
+            std::cout << "Select an option (1-6): ";
+
+            int choice = 0;
+            if (!(std::cin >> choice)) {
+                std::cin.clear();
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                std::cout << "Invalid input. Please try again." << std::endl;
+                continue;
+            }
+
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+            if (choice == 1) {
+                std::cout << "Enter new keyword limit (3 - 25): ";
+                std::size_t newLimit = keywordLimitValue;
+                if (std::cin >> newLimit && newLimit >= 3 && newLimit <= 25) {
+                    keywordLimitValue = newLimit;
+                    std::cout << "Keyword limit updated." << std::endl;
+                } else {
+                    std::cout << "Invalid range. Keeping previous value." << std::endl;
+                }
+                std::cin.clear();
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            } else if (choice == 2) {
+                showAsciiChartsValue = !showAsciiChartsValue;
+                std::cout << "ASCII charts are now " << (showAsciiChartsValue ? "enabled." : "disabled.")
+                          << std::endl;
+            } else if (choice == 3) {
+                autoExportEnabledValue = !autoExportEnabledValue;
+                std::cout << "Auto-export is now " << (autoExportEnabledValue ? "enabled." : "disabled.")
+                          << std::endl;
+            } else if (choice == 4) {
+                std::cout << "Enter new auto-export path: ";
+                std::string newPath;
+                std::getline(std::cin, newPath);
+                if (!newPath.empty()) {
+                    autoExportPathValue = newPath;
+                    std::cout << "Auto-export path updated." << std::endl;
+                } else {
+                    std::cout << "Path can't be empty. Keeping previous value." << std::endl;
+                }
+            } else if (choice == 5) {
+                highlightUppercaseValue = !highlightUppercaseValue;
+                std::cout << "Uppercase highlight tips are now "
+                          << (highlightUppercaseValue ? "enabled." : "disabled.") << std::endl;
+            } else if (choice == 6) {
+                break;
+            } else {
+                std::cout << "Unknown option." << std::endl;
+            }
+        }
+    }
+
+  private:
+    std::size_t keywordLimitValue;
+    bool showAsciiChartsValue;
+    bool autoExportEnabledValue;
+    std::string autoExportPathValue;
+    bool highlightUppercaseValue;
 };
 
 // --- Core analysis engine --------------------------------------------------------------------
@@ -491,7 +932,7 @@ class TextIntelligenceEngine {
   public:
     TextIntelligenceEngine() : sentimentLexicon() {}
 
-    TextAnalysis analyze(const std::string &text) {
+    TextAnalysis analyze(const std::string &text, std::size_t keywordLimit) {
         TextAnalysis analysis;
         analysis.originalText = text;
         analysis.trimmedText = trim(text);
@@ -504,6 +945,10 @@ class TextIntelligenceEngine {
 
         analysis.uppercaseText = toUpper(text);
         analysis.lowercaseText = toLower(text);
+        analysis.titleCaseText = toTitleCase(text);
+        analysis.reversedText = reverseText(text);
+        analysis.uppercaseWords = extractUppercaseWords(text);
+
         analysis.words = splitWords(text);
         analysis.uniqueWords = splitUniqueWords(text);
         analysis.sentences = splitSentences(text);
@@ -513,26 +958,67 @@ class TextIntelligenceEngine {
         analysis.trigrams = buildNGrams(analysis.words, 3);
         analysis.characterSignature = buildCharacterSignature(text);
         analysis.sentiment = analyzeSentiment(analysis.words, sentimentLexicon);
-        analysis.keywords = extractTopKeywords(analysis.words, 8);
+        analysis.keywords = extractTopKeywords(analysis.words, keywordLimit);
+        analysis.commonPrefixes = computeAffixFrequency(analysis.words, 3, true, 6);
+        analysis.commonSuffixes = computeAffixFrequency(analysis.words, 3, false, 6);
+        analysis.frequentLetterPairs = computeLetterPairs(text, 6);
 
         processWordStatistics(analysis);
         processSentenceStatistics(analysis);
         processPalindrome(analysis);
         processReadability(analysis);
+        analysis.patterns = analyzePatterns(text, analysis.words, analysis.uppercaseWords);
+        analysis.repeatedSentences = detectRepeatedSentences(analysis.sentences);
+        analysis.creativePrompts = generateCreativePrompts(analysis);
 
         return analysis;
     }
 
-    void printAnalysis(const TextAnalysis &analysis) const {
+    void printAnalysis(const TextAnalysis &analysis, const AppConfig &config) const {
         printHeader();
         printOriginalTextSection(analysis);
         printMeasurementsSection(analysis);
+        printReadabilitySection(analysis);
         printSentenceDiagnostics(analysis);
         printKeywordHighlights(analysis);
+        printPatternHighlights(analysis, config);
         printNGramHighlights(analysis);
-        printCharacterSignature(analysis);
+        printCharacterSignature(analysis, config);
         printSentiment(analysis);
-        printRecommendations(analysis);
+        printRecommendations(analysis, config);
+    }
+
+    bool exportAnalysis(const TextAnalysis &analysis, const std::string &path) const {
+        std::ofstream file(path);
+        if (!file.is_open()) {
+            return false;
+        }
+
+        file << "Ultra Text Intelligence Report" << std::endl;
+        file << "================================" << std::endl;
+        file << "Original: " << analysis.originalText << '\n';
+        file << "Word count: " << analysis.words.size() << '\n';
+        file << "Unique words: " << analysis.uniqueWords.size() << '\n';
+        file << "Average word length: " << std::fixed << std::setprecision(2) << analysis.averageWordLength << '\n';
+        file << "Flesch Reading Ease: " << std::fixed << std::setprecision(2) << analysis.readability.fleschReadingEase
+             << '\n';
+        file << "Sentiment: " << analysis.sentiment.overallFeeling
+             << " (score: " << std::fixed << std::setprecision(2) << analysis.sentiment.normalizedScore << ")\n";
+        file << "Top keywords:" << '\n';
+        for (const auto &keyword : analysis.keywords) {
+            file << "  - " << keyword.keyword << " (" << keyword.frequency << " occurrences)" << '\n';
+        }
+        file << std::endl;
+        file.close();
+        return true;
+    }
+
+    SentimentLexicon &lexicon() {
+        return sentimentLexicon;
+    }
+
+    const SentimentLexicon &lexicon() const {
+        return sentimentLexicon;
     }
 
   private:
@@ -541,20 +1027,51 @@ class TextIntelligenceEngine {
     static void processWordStatistics(TextAnalysis &analysis) {
         analysis.totalSyllables = 0;
         analysis.totalWordLength = 0;
+        analysis.totalLetters = 0;
+        analysis.complexWordCount = 0;
+
+        std::vector<int> lengths;
+        lengths.reserve(analysis.words.size());
+
         for (const auto &word : analysis.words) {
-            analysis.totalSyllables += estimateSyllables(word);
+            const int syllables = estimateSyllables(word);
+            analysis.totalSyllables += syllables;
             analysis.totalWordLength += static_cast<int>(word.size());
+            analysis.totalLetters += static_cast<int>(word.size());
+            lengths.push_back(static_cast<int>(word.size()));
+
             if (word.size() > analysis.longestWord.size()) {
                 analysis.longestWord = word;
             }
             if (analysis.shortestWord.empty() || word.size() < analysis.shortestWord.size()) {
                 analysis.shortestWord = word;
             }
+
+            if (syllables >= 3) {
+                ++analysis.complexWordCount;
+            }
         }
 
         if (!analysis.words.empty()) {
             analysis.averageWordLength = static_cast<double>(analysis.totalWordLength) /
                                          static_cast<double>(analysis.words.size());
+            analysis.vocabularyDiversity = static_cast<double>(analysis.uniqueWords.size()) /
+                                           static_cast<double>(analysis.words.size());
+            analysis.averageSyllablesPerWord = static_cast<double>(analysis.totalSyllables) /
+                                               static_cast<double>(analysis.words.size());
+            analysis.complexWordPercentage = static_cast<double>(analysis.complexWordCount) * 100.0 /
+                                             static_cast<double>(analysis.words.size());
+        }
+
+        if (!lengths.empty()) {
+            std::sort(lengths.begin(), lengths.end());
+            if (lengths.size() % 2 == 0) {
+                const auto mid = lengths.size() / 2;
+                analysis.medianWordLength =
+                    (static_cast<double>(lengths[mid - 1]) + static_cast<double>(lengths[mid])) / 2.0;
+            } else {
+                analysis.medianWordLength = static_cast<double>(lengths[lengths.size() / 2]);
+            }
         }
     }
 
@@ -590,383 +1107,4 @@ class TextIntelligenceEngine {
         analysis.palindrome = !normalized.empty() && normalized == reversed;
     }
 
-    static void processReadability(TextAnalysis &analysis) {
-        const int totalWords = static_cast<int>(analysis.words.size());
-        const int totalSentences = static_cast<int>(analysis.sentences.size());
-        analysis.fleschScore = fleschReadingEase(totalWords, totalSentences, analysis.totalSyllables);
-        analysis.gradeLevel = fleschKincaidGradeLevel(totalWords, totalSentences, analysis.totalSyllables);
-    }
-
-    static void printHeader() {
-        std::cout << "\n🧠 Ultra Text Intelligence Report" << std::endl;
-        std::cout << "==================================" << std::endl;
-    }
-
-    static void printOriginalTextSection(const TextAnalysis &analysis) {
-        std::cout << "\n📝 Core Text Views" << std::endl;
-        std::cout << "------------------" << std::endl;
-        std::cout << "Original: " << analysis.originalText << std::endl;
-        std::cout << "Trimmed: " << analysis.trimmedText << std::endl;
-        std::cout << "Uppercase: " << analysis.uppercaseText << std::endl;
-        std::cout << "Lowercase: " << analysis.lowercaseText << std::endl;
-    }
-
-    static void printMeasurementsSection(const TextAnalysis &analysis) {
-        std::cout << "\n📊 Measurements" << std::endl;
-        std::cout << "----------------" << std::endl;
-        std::cout << "- Characters (with spaces): " << analysis.charCountWithSpaces << std::endl;
-        std::cout << "- Characters (without spaces): " << analysis.charCountWithoutSpaces << std::endl;
-        std::cout << "- Word count: " << analysis.words.size() << std::endl;
-        std::cout << "- Unique word count: " << analysis.uniqueWords.size() << std::endl;
-        std::cout << "- Average word length: " << std::fixed << std::setprecision(2)
-                  << analysis.averageWordLength << std::endl;
-        std::cout << "- Longest word: "
-                  << (analysis.longestWord.empty() ? "<none>" : analysis.longestWord) << std::endl;
-        std::cout << "- Shortest word: "
-                  << (analysis.shortestWord.empty() ? "<none>" : analysis.shortestWord) << std::endl;
-        std::cout << "- Sentence count: " << analysis.sentences.size() << std::endl;
-        std::cout << "- Average sentence length: " << std::fixed << std::setprecision(2)
-                  << analysis.averageSentenceLength << " words" << std::endl;
-        std::cout << "- Total syllables (estimated): " << analysis.totalSyllables << std::endl;
-        std::cout << "- Flesch Reading Ease: " << std::fixed << std::setprecision(2)
-                  << analysis.fleschScore << std::endl;
-        std::cout << "- Flesch-Kincaid Grade Level: " << std::fixed << std::setprecision(2)
-                  << analysis.gradeLevel << std::endl;
-        std::cout << "- Palindrome (ignoring punctuation & case): "
-                  << (analysis.palindrome ? "Yes" : "No") << std::endl;
-    }
-
-    static void printSentenceDiagnostics(const TextAnalysis &analysis) {
-        std::cout << "\n📐 Sentence Diagnostics" << std::endl;
-        std::cout << "------------------------" << std::endl;
-
-        if (analysis.sentenceInsights.empty()) {
-            std::cout << "No sentence boundaries detected." << std::endl;
-            return;
-        }
-
-        std::cout << "Longest sentence (" << analysis.longestSentence.wordCount << " words):\n"
-                  << "  " << analysis.longestSentence.text << std::endl;
-
-        std::cout << "Shortest sentence (" << analysis.shortestSentence.wordCount << " words):\n"
-                  << "  " << analysis.shortestSentence.text << std::endl;
-
-        std::cout << "\nDetailed breakdown:" << std::endl;
-        int index = 1;
-        for (const auto &info : analysis.sentenceInsights) {
-            std::cout << "  [" << index++ << "] " << info.wordCount << " words, " << info.syllableCount
-                      << " syllables (avg word length: " << std::fixed << std::setprecision(2)
-                      << info.averageWordLength << ")\n"
-                      << "      " << info.text << std::endl;
-        }
-    }
-
-    static void printKeywordHighlights(const TextAnalysis &analysis) {
-        std::cout << "\n🔑 Keyword Highlights" << std::endl;
-        std::cout << "---------------------" << std::endl;
-
-        if (analysis.keywords.empty()) {
-            std::cout << "Not enough content to extract keywords." << std::endl;
-            return;
-        }
-
-        for (const auto &keyword : analysis.keywords) {
-            std::cout << "- " << keyword.keyword << ": " << keyword.frequency << " occurrences ("
-                      << std::fixed << std::setprecision(2) << keyword.percentageOfTotal << "% of text)"
-                      << std::endl;
-        }
-    }
-
-    static void printNGramHighlights(const TextAnalysis &analysis) {
-        std::cout << "\n🧩 N-gram Highlights" << std::endl;
-        std::cout << "--------------------" << std::endl;
-        printTopNGrams(analysis.bigrams, "Bigrams");
-        printTopNGrams(analysis.trigrams, "Trigrams");
-    }
-
-    static void printTopNGrams(const NGramFrequencyMap &ngrams, const std::string &title) {
-        std::cout << title << ":" << std::endl;
-        if (ngrams.empty()) {
-            std::cout << "  <none>" << std::endl;
-            return;
-        }
-
-        std::vector<std::pair<NGram, int>> sorted(ngrams.begin(), ngrams.end());
-        std::sort(sorted.begin(), sorted.end(), [](const auto &lhs, const auto &rhs) {
-            if (lhs.second == rhs.second) {
-                return lhs.first < rhs.first;
-            }
-            return lhs.second > rhs.second;
-        });
-
-        const std::size_t limit = std::min<std::size_t>(sorted.size(), 5);
-        for (std::size_t i = 0; i < limit; ++i) {
-            std::cout << "  - " << joinNGram(sorted[i].first) << " (" << sorted[i].second << " occurrences)"
-                      << std::endl;
-        }
-    }
-
-    static void printCharacterSignature(const TextAnalysis &analysis) {
-        std::cout << "\n🔠 Character Signature" << std::endl;
-        std::cout << "----------------------" << std::endl;
-        const auto &signature = analysis.characterSignature;
-        std::cout << "Unique printable characters: " << signature.uniqueCharacters.size() << std::endl;
-        if (signature.mostCommonCount > 0) {
-            std::cout << "Most common character: '" << signature.mostCommonCharacter << "' ("
-                      << signature.mostCommonCount << " times)" << std::endl;
-        }
-
-        std::cout << "Top characters:" << std::endl;
-        if (signature.frequency.empty()) {
-            std::cout << "  <none>" << std::endl;
-            return;
-        }
-
-        std::vector<std::pair<char, int>> sorted(signature.frequency.begin(), signature.frequency.end());
-        std::sort(sorted.begin(), sorted.end(), [](const auto &lhs, const auto &rhs) {
-            if (lhs.second == rhs.second) {
-                return lhs.first < rhs.first;
-            }
-            return lhs.second > rhs.second;
-        });
-
-        const std::size_t limit = std::min<std::size_t>(sorted.size(), 10);
-        for (std::size_t i = 0; i < limit; ++i) {
-            const double relative = static_cast<double>(sorted[i].second) * 100.0 /
-                                    static_cast<double>(analysis.charCountWithSpaces);
-            std::cout << "  - '" << sorted[i].first << "' -> " << sorted[i].second << " times ("
-                      << std::fixed << std::setprecision(2) << relative << "%)" << std::endl;
-        }
-    }
-
-    static void printSentiment(const TextAnalysis &analysis) {
-        std::cout << "\n💬 Sentiment Snapshot" << std::endl;
-        std::cout << "---------------------" << std::endl;
-        const auto &sentiment = analysis.sentiment;
-        std::cout << "- Positive matches: " << sentiment.positiveMatches << std::endl;
-        std::cout << "- Negative matches: " << sentiment.negativeMatches << std::endl;
-        std::cout << "- Sentiment score: " << std::fixed << std::setprecision(2) << sentiment.normalizedScore
-                  << std::endl;
-        std::cout << "- Overall feeling: " << sentiment.overallFeeling << std::endl;
-
-        if (sentiment.overallFeeling == "Neutral") {
-            std::cout << "Tip: Try adding emotional adjectives to shift the sentiment." << std::endl;
-        } else if (sentiment.overallFeeling == "Mixed") {
-            std::cout << "Tip: Your text has balanced emotion. Emphasize one side for clarity." << std::endl;
-        } else if (sentiment.overallFeeling == "Negative") {
-            std::cout << "Tip: Consider injecting positive language to brighten the tone." << std::endl;
-        } else {
-            std::cout << "Tip: Positive tone detected. Keep the momentum going!" << std::endl;
-        }
-    }
-
-    static void printRecommendations(const TextAnalysis &analysis) {
-        std::cout << "\n✨ Intelligent Recommendations" << std::endl;
-        std::cout << "-----------------------------" << std::endl;
-
-        if (analysis.words.size() > 50 && analysis.gradeLevel > 12.0) {
-            std::cout << "- Your text reads at a college level. Simplify sentences to reach a broader audience."
-                      << std::endl;
-        } else if (analysis.gradeLevel < 6.0) {
-            std::cout << "- The language is very easy to digest. Add descriptive words for richer storytelling."
-                      << std::endl;
-        } else {
-            std::cout << "- Complexity is moderate. Maintain sentence variety to keep readers engaged."
-                      << std::endl;
-        }
-
-        if (analysis.sentiment.overallFeeling == "Negative") {
-            std::cout << "- Consider rebalancing with positive phrasing to lift the mood." << std::endl;
-        }
-
-        if (!analysis.palindrome && analysis.words.size() >= 3) {
-            std::cout << "- Try crafting a palindrome challenge using your theme. It's fun and mind-bending!"
-                      << std::endl;
-        }
-
-        if (!analysis.uniqueWords.empty()) {
-            std::cout << "- You used " << analysis.uniqueWords.size() << " unique words. Explore synonyms to expand"
-                      << " the vocabulary range." << std::endl;
-        }
-    }
-};
-
-} // namespace text_utils
-
-// --- Interactive console application ---------------------------------------------------------
-
-class ConsoleUI {
-  public:
-    ConsoleUI() : engine(), history() {}
-
-    void run() {
-        printWelcome();
-        std::string userInput;
-
-        while (true) {
-            const int choice = promptMenu();
-            if (choice == 5) {
-                std::cout << "Thanks for exploring the Ultra Text Intelligence Console. 👋" << std::endl;
-                break;
-            }
-
-            switch (choice) {
-            case 1:
-                analyzeSingleEntry();
-                break;
-            case 2:
-                analyzeBatchEntries();
-                break;
-            case 3:
-                history.printHistory();
-                break;
-            case 4:
-                printHelp();
-                break;
-            default:
-                std::cout << "Unknown option selected." << std::endl;
-                break;
-            }
-        }
-    }
-
-  private:
-    text_utils::TextIntelligenceEngine engine;
-    text_utils::TextHistory history;
-
-    static void printWelcome() {
-        std::cout << "✨ Welcome to the Ultra Text Intelligence Console ✨" << std::endl;
-        std::cout << "Discover deep insights, readability metrics, sentiment, and more." << std::endl;
-    }
-
-    static void printHelp() {
-        std::cout << "\nℹ️ Help & Tips" << std::endl;
-        std::cout << "--------------" << std::endl;
-        std::cout << "1. Analyze a single entry: Paste or type text and receive an extensive report." << std::endl;
-        std::cout << "2. Batch analysis: Evaluate multiple lines, perfect for brainstorming sessions." << std::endl;
-        std::cout << "3. View history: Review the most recent 12 inputs processed." << std::endl;
-        std::cout << "4. Help menu: You're here right now!" << std::endl;
-        std::cout << "5. Exit: Close the console experience." << std::endl;
-    }
-
-    static int promptMenu() {
-        std::cout << "\nMain Menu" << std::endl;
-        std::cout << "---------" << std::endl;
-        std::cout << "1. Analyze single entry" << std::endl;
-        std::cout << "2. Analyze batch entries" << std::endl;
-        std::cout << "3. View input history" << std::endl;
-        std::cout << "4. Help & tips" << std::endl;
-        std::cout << "5. Exit" << std::endl;
-        std::cout << "Select an option (1-5): ";
-
-        int choice = 0;
-        while (!(std::cin >> choice) || choice < 1 || choice > 5) {
-            std::cout << "Invalid choice. Please enter a number between 1 and 5: ";
-            std::cin.clear();
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        }
-
-        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        return choice;
-    }
-
-    void analyzeSingleEntry() {
-        std::cout << "\nPlease enter your text (single paragraph)." << std::endl;
-        std::cout << "Finish input with an empty line." << std::endl;
-
-        std::string input = captureMultilineInput();
-        if (input.empty()) {
-            std::cout << "No text captured. Returning to menu." << std::endl;
-            return;
-        }
-
-        history.addEntry(input);
-        const auto analysis = engine.analyze(input);
-        engine.printAnalysis(analysis);
-    }
-
-    void analyzeBatchEntries() {
-        std::cout << "\nBatch mode activated." << std::endl;
-        std::cout << "Enter multiple lines. Type a single line with 'END' to finish." << std::endl;
-
-        std::vector<std::string> lines;
-        std::string line;
-        while (true) {
-            std::getline(std::cin, line);
-            if (text_utils::equalsIgnoreCase(text_utils::trim(line), "END")) {
-                break;
-            }
-            lines.push_back(line);
-        }
-
-        if (lines.empty()) {
-            std::cout << "No lines collected. Returning to menu." << std::endl;
-            return;
-        }
-
-        std::ostringstream combined;
-        for (const auto &entry : lines) {
-            combined << entry << '\n';
-        }
-
-        std::string text = combined.str();
-        history.addEntry(text_utils::trim(text));
-        const auto analysis = engine.analyze(text);
-        engine.printAnalysis(analysis);
-
-        printBatchSummary(lines);
-    }
-
-    static std::string captureMultilineInput() {
-        std::ostringstream buffer;
-        std::string line;
-        while (true) {
-            if (!std::getline(std::cin, line)) {
-                break;
-            }
-            if (line.empty()) {
-                break;
-            }
-            buffer << line << '\n';
-        }
-        return text_utils::trim(buffer.str());
-    }
-
-    static void printBatchSummary(const std::vector<std::string> &lines) {
-        std::cout << "\n📦 Batch Summary" << std::endl;
-        std::cout << "----------------" << std::endl;
-        std::cout << "- Total lines processed: " << lines.size() << std::endl;
-        std::size_t maxLength = 0;
-        std::size_t minLength = std::numeric_limits<std::size_t>::max();
-
-        for (const auto &line : lines) {
-            maxLength = std::max(maxLength, line.size());
-            minLength = std::min(minLength, line.size());
-        }
-
-        if (!lines.empty()) {
-            const double averageLength = std::accumulate(
-                lines.begin(), lines.end(), 0.0,
-                [](double sum, const std::string &entry) {
-                    return sum + static_cast<double>(entry.size());
-                }) /
-                                        static_cast<double>(lines.size());
-            std::cout << "- Longest line length: " << maxLength << std::endl;
-            std::cout << "- Shortest line length: " << minLength << std::endl;
-            std::cout << "- Average line length: " << std::fixed << std::setprecision(2) << averageLength
-                      << std::endl;
-        }
-
-        std::cout << "- Preview of first three lines:" << std::endl;
-        const std::size_t previewCount = std::min<std::size_t>(3, lines.size());
-        for (std::size_t i = 0; i < previewCount; ++i) {
-            std::cout << "  " << (i + 1) << ": " << lines[i] << std::endl;
-        }
-    }
-};
-
-int main() {
-    ConsoleUI ui;
-    ui.run();
-    return 0;
-}
+    static void
