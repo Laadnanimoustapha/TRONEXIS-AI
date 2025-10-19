@@ -1,0 +1,3 @@
+C:/Users/pc/Desktop/PROJECT TIME/TS/NEXUS-AI/CMakeFiles/prompt_app.dir
+C:/Users/pc/Desktop/PROJECT TIME/TS/NEXUS-AI/CMakeFiles/edit_cache.dir
+C:/Users/pc/Desktop/PROJECT TIME/TS/NEXUS-AI/CMakeFiles/rebuild_cache.dir
